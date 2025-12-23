@@ -15,14 +15,15 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
+const isVercel = process.env.VERCEL === '1';
 const PORT = process.env.PORT || 3001;
 
 // Middleware
 app.use(cors());
 app.use(express.json());
 
-// Ensure uploads directory exists
-const uploadsDir = path.join(__dirname, 'uploads');
+// Use /tmp for uploads in Vercel, or local uploadsDir in dev
+const uploadsDir = isVercel ? '/tmp/uploads' : path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
@@ -61,11 +62,11 @@ app.post('/api/upload', upload.single('receipt'), async (req, res) => {
     }
 
     const { provider, amount, date, category, notes } = req.body;
-    
+
     // Upload to Google Drive
     let driveFileId = null;
     let driveLink = null;
-    
+
     try {
       const driveResult = await uploadToDrive(req.file.path, req.file.originalname, req.file.mimetype);
       driveFileId = driveResult.id;
@@ -97,8 +98,8 @@ app.post('/api/upload', upload.single('receipt'), async (req, res) => {
     res.json({
       success: true,
       receipt,
-      message: driveFileId 
-        ? 'Receipt uploaded and synced to Google Drive!' 
+      message: driveFileId
+        ? 'Receipt uploaded and synced to Google Drive!'
         : 'Receipt saved locally (Google Drive sync pending)'
     });
   } catch (error) {
@@ -111,7 +112,7 @@ app.post('/api/upload', upload.single('receipt'), async (req, res) => {
 app.get('/api/receipts', async (req, res) => {
   try {
     const receipts = await getReceipts();
-    
+
     // Calculate totals by category
     const totals = receipts.reduce((acc, r) => {
       acc.total += r.amount;
@@ -190,7 +191,7 @@ app.post('/api/receipts/:id/sync', async (req, res) => {
     }
 
     const driveResult = await uploadToDrive(receipt.localPath, receipt.originalName, receipt.mimeType);
-    
+
     receipt.driveFileId = driveResult.id;
     receipt.driveLink = driveResult.webViewLink;
     receipt.syncedToDrive = true;
@@ -215,7 +216,11 @@ app.use((error, req, res, next) => {
   res.status(500).json({ error: error.message || 'Internal server error' });
 });
 
-app.listen(PORT, () => {
-  console.log(`🚀 HSA Receipt Tracker API running on http://localhost:${PORT}`);
-  console.log(`📁 Uploads stored in: ${uploadsDir}`);
-});
+if (!isVercel) {
+  app.listen(PORT, () => {
+    console.log(`🚀 HSA Receipt Tracker API running on http://localhost:${PORT}`);
+    console.log(`📁 Uploads stored in: ${uploadsDir}`);
+  });
+}
+
+export default app;

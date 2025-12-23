@@ -1,1 +1,0 @@
-feat: Initial implementation with Google Drive integration
