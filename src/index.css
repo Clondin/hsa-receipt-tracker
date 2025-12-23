@@ -250,7 +250,12 @@ body {
   height: 8px;
   background: var(--accent-success);
   border-radius: 50%;
+  border-radius: 50%;
   animation: pulse 2s infinite;
+}
+
+.hero-badge-dot.pending {
+  background: var(--accent-warning);
 }
 
 .hero h1 {

@@ -21,12 +21,24 @@ function App() {
     const [receipts, setReceipts] = useState([]);
     const [totals, setTotals] = useState({ total: 0, byCategory: {} });
     const [loading, setLoading] = useState(false);
+    const [config, setConfig] = useState(null);
     const [toasts, setToasts] = useState([]);
 
-    // Fetch receipts on mount and tab change
+    // Fetch receipts and config on mount
     useEffect(() => {
         fetchReceipts();
+        fetchConfig();
     }, []);
+
+    const fetchConfig = async () => {
+        try {
+            const response = await fetch('/api/config');
+            const data = await response.json();
+            setConfig(data);
+        } catch (error) {
+            console.error('Failed to fetch config:', error);
+        }
+    };
 
     const fetchReceipts = async () => {
         try {
@@ -136,9 +148,14 @@ function App() {
                         <section className="hero">
                             <div className="container hero-content animate-fade-in">
                                 <div className="hero-badge">
-                                    <span className="hero-badge-dot"></span>
-                                    Google Drive Connected
+                                    <span className={`hero-badge-dot ${config?.driveFolderId !== 'Not configured' ? '' : 'pending'}`}></span>
+                                    {config?.isSheetsConfigured ? 'Drive & Sheets Connected' : 'Google Drive Connected'}
                                 </div>
+                                {config && (
+                                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: 'var(--space-md)' }}>
+                                        Using account: {config.serviceAccount}
+                                    </div>
+                                )}
                                 <h1>
                                     Track Your <span>HSA Expenses</span><br />
                                     Effortlessly

@@ -7,6 +7,7 @@ import dotenv from 'dotenv';
 import { v4 as uuidv4 } from 'uuid';
 import fs from 'fs';
 import { uploadToDrive, deleteFromDrive, getFileLink } from './services/googleDrive.js';
+import { appendReceiptToSheet, isSheetsConfigured } from './services/googleSheets.js';
 import { saveReceipt, getReceipts, deleteReceipt, getReceiptById } from './services/receiptStore.js';
 
 dotenv.config();
@@ -75,6 +76,16 @@ app.post('/api/upload', upload.single('receipt'), async (req, res) => {
       console.warn('Google Drive upload failed, storing locally:', driveError.message);
     }
 
+    // Append to Google Sheet
+    let sheetResult = null;
+    try {
+      if (driveLink) { // Only append if we have a drive link (or maybe even if not?) - let's append anyway but link might be empty
+        // We pass the full receipt object, but constructing it here first is better
+      }
+    } catch (sheetError) {
+      console.warn('Google Sheets append failed');
+    }
+
     // Create receipt record
     const receipt = {
       id: uuidv4(),
@@ -93,13 +104,20 @@ app.post('/api/upload', upload.single('receipt'), async (req, res) => {
       createdAt: new Date().toISOString()
     };
 
+    // Append to Google Sheet
+    if (driveFileId) {
+      await appendReceiptToSheet(receipt);
+    }
+
     await saveReceipt(receipt);
+
+    const sheetStatus = isSheetsConfigured() ? ' & Sheets' : '';
 
     res.json({
       success: true,
       receipt,
       message: driveFileId
-        ? 'Receipt uploaded and synced to Google Drive!'
+        ? `Receipt uploaded and synced to Google Drive${sheetStatus}!`
         : 'Receipt saved locally (Google Drive sync pending)'
     });
   } catch (error) {
@@ -176,6 +194,19 @@ app.delete('/api/receipts/:id', async (req, res) => {
     console.error('Delete error:', error);
     res.status(500).json({ error: 'Failed to delete receipt' });
   }
+});
+
+// Get configuration (safe subset)
+app.get('/api/config', (req, res) => {
+  const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || process.env.VITE_GOOGLE_SERVICE_ACCOUNT_EMAIL || '';
+  const maskedEmail = email ? `${email.substring(0, 5)}...${email.substring(email.indexOf('@'))}` : 'Not configured';
+
+  res.json({
+    driveFolderId: process.env.GOOGLE_DRIVE_FOLDER_ID || 'Not configured',
+    sheetId: process.env.GOOGLE_SHEET_ID || 'Not configured',
+    serviceAccount: maskedEmail,
+    isSheetsConfigured: isSheetsConfigured()
+  });
 });
 
 // Retry sync to Google Drive
