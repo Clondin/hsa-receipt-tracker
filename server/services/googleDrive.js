@@ -1,5 +1,6 @@
 import { google } from 'googleapis';
 import fs from 'fs';
+import { Readable } from 'stream';
 import { getAuthenticatedClient, isAuthenticated } from './googleAuth.js';
 
 /**
@@ -117,3 +118,60 @@ export const getFileLink = async (fileId) => {
         throw new Error(`Failed to get file link: ${error.message}`);
     }
 };
+
+/**
+ * Upload a file to Google Drive directly from a Buffer (for Vercel/serverless)
+ * @param {Buffer} buffer - File buffer
+ * @param {string} fileName - Original filename
+ * @param {string} mimeType - File MIME type
+ * @returns {Promise<{id: string, webViewLink: string}>}
+ */
+export const uploadFromBuffer = async (buffer, fileName, mimeType) => {
+    if (!isAuthenticated()) {
+        throw new Error('Not authenticated. Please login with Google first.');
+    }
+
+    const drive = await getDriveClient();
+    const folderId = process.env.GOOGLE_DRIVE_FOLDER_ID || process.env.VITE_GOOGLE_DRIVE_FOLDER_ID;
+
+    // Create a readable stream from buffer
+    const bufferStream = new Readable();
+    bufferStream.push(buffer);
+    bufferStream.push(null);
+
+    // Generate a descriptive filename with date
+    const dateStr = new Date().toISOString().split('T')[0];
+    const safeName = fileName.replace(/[^a-zA-Z0-9.-]/g, '_');
+    const driveFileName = `HSA_Receipt_${dateStr}_${safeName}`;
+
+    const fileMetadata = {
+        name: driveFileName,
+        ...(folderId && folderId !== 'root' && { parents: [folderId] })
+    };
+
+    const media = {
+        mimeType: mimeType,
+        body: bufferStream
+    };
+
+    try {
+        const response = await drive.files.create({
+            requestBody: fileMetadata,
+            media: media,
+            fields: 'id, name, webViewLink, webContentLink'
+        });
+
+        console.log(`✅ Uploaded to Google Drive: ${response.data.name} (ID: ${response.data.id})`);
+
+        return {
+            id: response.data.id,
+            name: response.data.name,
+            webViewLink: response.data.webViewLink || `https://drive.google.com/file/d/${response.data.id}/view`,
+            webContentLink: response.data.webContentLink
+        };
+    } catch (error) {
+        console.error('Google Drive upload error:', error.message);
+        throw new Error(`Failed to upload to Google Drive: ${error.message}`);
+    }
+};
+

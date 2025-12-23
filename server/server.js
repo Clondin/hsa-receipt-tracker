@@ -6,7 +6,7 @@ import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { v4 as uuidv4 } from 'uuid';
 import fs from 'fs';
-import { uploadToDrive, deleteFromDrive, getFileLink } from './services/googleDrive.js';
+import { uploadToDrive, uploadFromBuffer, deleteFromDrive, getFileLink } from './services/googleDrive.js';
 import { appendReceiptToSheet, isSheetsConfigured } from './services/googleSheets.js';
 import { getAuthUrl, exchangeCodeForTokens, isAuthenticated, clearTokens } from './services/googleAuth.js';
 import { saveReceipt, getReceipts, deleteReceipt, getReceiptById } from './services/receiptStore.js';
@@ -24,22 +24,26 @@ const PORT = process.env.PORT || 3001;
 app.use(cors());
 app.use(express.json());
 
-// Use /tmp for uploads in Vercel, or local uploadsDir in dev
+// Use /tmp for uploads in dev, memory storage on Vercel
 const uploadsDir = isVercel ? '/tmp/uploads' : path.join(__dirname, 'uploads');
-if (!fs.existsSync(uploadsDir)) {
+if (!isVercel && !fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
 // Configure multer for file uploads
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, uploadsDir);
-  },
-  filename: (req, file, cb) => {
-    const uniqueName = `${Date.now()}-${uuidv4()}${path.extname(file.originalname)}`;
-    cb(null, uniqueName);
-  }
-});
+// On Vercel: use memory storage (files stay in buffer)
+// In dev: use disk storage (files saved to uploadsDir)
+const storage = isVercel
+  ? multer.memoryStorage()
+  : multer.diskStorage({
+    destination: (req, file, cb) => {
+      cb(null, uploadsDir);
+    },
+    filename: (req, file, cb) => {
+      const uniqueName = `${Date.now()}-${uuidv4()}${path.extname(file.originalname)}`;
+      cb(null, uniqueName);
+    }
+  });
 
 const upload = multer({
   storage,
@@ -111,30 +115,38 @@ app.post('/api/upload', upload.single('receipt'), async (req, res) => {
     // Upload to Google Drive
     let driveFileId = null;
     let driveLink = null;
+    let localPath = null;
 
     try {
-      const driveResult = await uploadToDrive(req.file.path, req.file.originalname, req.file.mimetype);
+      let driveResult;
+      if (isVercel) {
+        // On Vercel: upload directly from buffer (no file storage)
+        driveResult = await uploadFromBuffer(req.file.buffer, req.file.originalname, req.file.mimetype);
+      } else {
+        // In dev: upload from disk
+        driveResult = await uploadToDrive(req.file.path, req.file.originalname, req.file.mimetype);
+        localPath = req.file.path;
+      }
       driveFileId = driveResult.id;
       driveLink = driveResult.webViewLink;
     } catch (driveError) {
-      console.warn('Google Drive upload failed, storing locally:', driveError.message);
-    }
-
-    // Append to Google Sheet
-    let sheetResult = null;
-    try {
-      if (driveLink) { // Only append if we have a drive link (or maybe even if not?) - let's append anyway but link might be empty
-        // We pass the full receipt object, but constructing it here first is better
+      console.warn('Google Drive upload failed:', driveError.message);
+      if (isVercel) {
+        // On Vercel, we can't store locally, so this is a fatal error
+        return res.status(500).json({
+          error: 'Google Drive upload required. Please ensure you are signed in with Google.',
+          details: driveError.message
+        });
       }
-    } catch (sheetError) {
-      console.warn('Google Sheets append failed');
+      // In dev mode, we can save locally for later sync
+      localPath = req.file.path;
     }
 
     // Create receipt record
     const receipt = {
       id: uuidv4(),
       originalName: req.file.originalname,
-      localPath: req.file.path,
+      localPath: localPath, // Will be null on Vercel (no local storage)
       mimeType: req.file.mimetype,
       size: req.file.size,
       provider: provider || 'Unknown Provider',
@@ -150,7 +162,11 @@ app.post('/api/upload', upload.single('receipt'), async (req, res) => {
 
     // Append to Google Sheet
     if (driveFileId) {
-      await appendReceiptToSheet(receipt);
+      try {
+        await appendReceiptToSheet(receipt);
+      } catch (sheetError) {
+        console.warn('Google Sheets append failed:', sheetError.message);
+      }
     }
 
     await saveReceipt(receipt);
@@ -197,8 +213,20 @@ app.get('/api/receipts/:id/image', async (req, res) => {
       return res.status(404).json({ error: 'Receipt not found' });
     }
 
-    if (fs.existsSync(receipt.localPath)) {
+    // On Vercel: redirect to Google Drive link (no local files)
+    if (isVercel) {
+      if (receipt.driveLink) {
+        return res.redirect(receipt.driveLink);
+      } else {
+        return res.status(404).json({ error: 'Image not available. Receipt was not synced to Google Drive.' });
+      }
+    }
+
+    // In dev: serve local file if it exists
+    if (receipt.localPath && fs.existsSync(receipt.localPath)) {
       res.sendFile(receipt.localPath);
+    } else if (receipt.driveLink) {
+      res.redirect(receipt.driveLink);
     } else {
       res.status(404).json({ error: 'Image file not found' });
     }
@@ -257,6 +285,14 @@ app.get('/api/config', (req, res) => {
 // Retry sync to Google Drive
 app.post('/api/receipts/:id/sync', async (req, res) => {
   try {
+    // On Vercel: sync isn't needed since files are uploaded directly to Drive
+    if (isVercel) {
+      return res.status(400).json({
+        error: 'Manual sync not available on Vercel. Files are uploaded directly to Google Drive.',
+        info: 'If upload failed, please try uploading again while signed in to Google.'
+      });
+    }
+
     const receipt = await getReceiptById(req.params.id);
     if (!receipt) {
       return res.status(404).json({ error: 'Receipt not found' });
@@ -264,6 +300,10 @@ app.post('/api/receipts/:id/sync', async (req, res) => {
 
     if (receipt.syncedToDrive) {
       return res.json({ success: true, message: 'Already synced to Google Drive' });
+    }
+
+    if (!receipt.localPath || !fs.existsSync(receipt.localPath)) {
+      return res.status(404).json({ error: 'Local file not found. Cannot sync.' });
     }
 
     const driveResult = await uploadToDrive(receipt.localPath, receipt.originalName, receipt.mimeType);
