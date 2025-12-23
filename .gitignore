@@ -1,1 +1,7 @@
+server/data/receipts.json
 node_modules
+.env
+server/data/oauth_tokens.json
+server/uploads/
+dist
+.DS_Store
