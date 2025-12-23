@@ -55,11 +55,19 @@ function App() {
         try {
             const response = await fetch('/api/auth/login');
             const data = await response.json();
+
+            if (!response.ok) {
+                throw new Error(data.error || 'Failed to initialize login');
+            }
+
             if (data.authUrl) {
                 window.location.href = data.authUrl;
+            } else {
+                throw new Error('No authentication URL received');
             }
         } catch (error) {
-            showToast('Failed to start login', 'error');
+            console.error('Login error:', error);
+            showToast(error.message || 'Failed to start login', 'error');
         }
     };
 
