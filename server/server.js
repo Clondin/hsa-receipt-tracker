@@ -8,6 +8,7 @@ import { v4 as uuidv4 } from 'uuid';
 import fs from 'fs';
 import { uploadToDrive, deleteFromDrive, getFileLink } from './services/googleDrive.js';
 import { appendReceiptToSheet, isSheetsConfigured } from './services/googleSheets.js';
+import { getAuthUrl, exchangeCodeForTokens, isAuthenticated, clearTokens } from './services/googleAuth.js';
 import { saveReceipt, getReceipts, deleteReceipt, getReceiptById } from './services/receiptStore.js';
 
 dotenv.config();
@@ -54,6 +55,49 @@ const upload = multer({
 });
 
 // API Routes
+
+// ============ OAuth Routes ============
+
+// Get auth status
+app.get('/api/auth/status', (req, res) => {
+  res.json({ authenticated: isAuthenticated() });
+});
+
+// Start OAuth login
+app.get('/api/auth/login', (req, res) => {
+  try {
+    const authUrl = getAuthUrl();
+    res.json({ authUrl });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// OAuth callback
+app.get('/api/auth/callback', async (req, res) => {
+  const { code } = req.query;
+  if (!code) {
+    return res.status(400).send('Missing authorization code');
+  }
+
+  try {
+    await exchangeCodeForTokens(code);
+    // Redirect to frontend with success
+    const frontendUrl = process.env.CLIENT_URL || 'http://localhost:5173';
+    res.redirect(`${frontendUrl}?auth=success`);
+  } catch (error) {
+    console.error('OAuth callback error:', error);
+    res.status(500).send('Authentication failed: ' + error.message);
+  }
+});
+
+// Logout
+app.post('/api/auth/logout', (req, res) => {
+  clearTokens();
+  res.json({ success: true });
+});
+
+// ============ Receipt Routes ============
 
 // Upload a receipt
 app.post('/api/upload', upload.single('receipt'), async (req, res) => {
@@ -202,10 +246,11 @@ app.get('/api/config', (req, res) => {
   const maskedEmail = email ? `${email.substring(0, 5)}...${email.substring(email.indexOf('@'))}` : 'Not configured';
 
   res.json({
-    driveFolderId: process.env.GOOGLE_DRIVE_FOLDER_ID || 'Not configured',
+    driveFolderId: process.env.GOOGLE_DRIVE_FOLDER_ID || process.env.VITE_GOOGLE_DRIVE_FOLDER_ID || 'Not configured',
     sheetId: process.env.GOOGLE_SHEET_ID || 'Not configured',
     serviceAccount: maskedEmail,
-    isSheetsConfigured: isSheetsConfigured()
+    isSheetsConfigured: isSheetsConfigured(),
+    isAuthenticated: isAuthenticated()
   });
 });
 

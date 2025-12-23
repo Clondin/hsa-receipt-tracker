@@ -40,6 +40,39 @@ function App() {
         }
     };
 
+    // Check for auth success in URL
+    useEffect(() => {
+        const params = new URLSearchParams(window.location.search);
+        if (params.get('auth') === 'success') {
+            showToast('Successfully connected to Google Drive!', 'success');
+            fetchConfig();
+            // Clean up URL
+            window.history.replaceState({}, document.title, '/');
+        }
+    }, []);
+
+    const handleLogin = async () => {
+        try {
+            const response = await fetch('/api/auth/login');
+            const data = await response.json();
+            if (data.authUrl) {
+                window.location.href = data.authUrl;
+            }
+        } catch (error) {
+            showToast('Failed to start login', 'error');
+        }
+    };
+
+    const handleLogout = async () => {
+        try {
+            await fetch('/api/auth/logout', { method: 'POST' });
+            showToast('Logged out', 'success');
+            fetchConfig();
+        } catch (error) {
+            showToast('Failed to logout', 'error');
+        }
+    };
+
     const fetchReceipts = async () => {
         try {
             setLoading(true);
@@ -148,12 +181,29 @@ function App() {
                         <section className="hero">
                             <div className="container hero-content animate-fade-in">
                                 <div className="hero-badge">
-                                    <span className={`hero-badge-dot ${config?.driveFolderId !== 'Not configured' ? '' : 'pending'}`}></span>
-                                    {config?.isSheetsConfigured ? 'Drive & Sheets Connected' : 'Google Drive Connected'}
+                                    <span className={`hero-badge-dot ${config?.isAuthenticated ? '' : 'pending'}`}></span>
+                                    {config?.isAuthenticated
+                                        ? (config?.isSheetsConfigured ? 'Drive & Sheets Connected' : 'Google Drive Connected')
+                                        : 'Not Connected'
+                                    }
                                 </div>
-                                {config && (
+                                {!config?.isAuthenticated && (
+                                    <button
+                                        className="btn btn-primary"
+                                        onClick={handleLogin}
+                                        style={{ marginBottom: 'var(--space-lg)' }}
+                                    >
+                                        🔐 Sign in with Google
+                                    </button>
+                                )}
+                                {config?.isAuthenticated && (
                                     <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: 'var(--space-md)' }}>
-                                        Using account: {config.serviceAccount}
+                                        <button
+                                            onClick={handleLogout}
+                                            style={{ background: 'none', border: 'none', color: 'var(--accent-secondary)', cursor: 'pointer', textDecoration: 'underline' }}
+                                        >
+                                            Logout
+                                        </button>
                                     </div>
                                 )}
                                 <h1>

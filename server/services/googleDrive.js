@@ -1,35 +1,32 @@
 import { google } from 'googleapis';
 import fs from 'fs';
-import path from 'path';
+import { getAuthenticatedClient, isAuthenticated } from './googleAuth.js';
 
-// Initialize Google Drive API client
-const initDriveClient = () => {
-    const serviceAccountEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
-    const privateKey = process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n');
-
-    if (!serviceAccountEmail || !privateKey) {
-        throw new Error('Google Drive credentials not configured. Please set GOOGLE_SERVICE_ACCOUNT_EMAIL and GOOGLE_PRIVATE_KEY in .env');
+/**
+ * Get Drive client using OAuth
+ */
+const getDriveClient = async () => {
+    const authClient = await getAuthenticatedClient();
+    if (!authClient) {
+        throw new Error('Not authenticated. Please login with Google first.');
     }
-
-    const auth = new google.auth.JWT({
-        email: serviceAccountEmail,
-        key: privateKey,
-        scopes: ['https://www.googleapis.com/auth/drive.file']
-    });
-
-    return google.drive({ version: 'v3', auth });
+    return google.drive({ version: 'v3', auth: authClient });
 };
 
 /**
- * Upload a file to Google Drive
+ * Upload a file to Google Drive using OAuth
  * @param {string} filePath - Local path to the file
  * @param {string} fileName - Original filename
  * @param {string} mimeType - File MIME type
  * @returns {Promise<{id: string, webViewLink: string}>}
  */
 export const uploadToDrive = async (filePath, fileName, mimeType) => {
-    const drive = initDriveClient();
-    const folderId = process.env.GOOGLE_DRIVE_FOLDER_ID;
+    if (!isAuthenticated()) {
+        throw new Error('Not authenticated. Please login with Google first.');
+    }
+
+    const drive = await getDriveClient();
+    const folderId = process.env.GOOGLE_DRIVE_FOLDER_ID || process.env.VITE_GOOGLE_DRIVE_FOLDER_ID;
 
     // Create a readable stream
     const fileStream = fs.createReadStream(filePath);
@@ -41,7 +38,7 @@ export const uploadToDrive = async (filePath, fileName, mimeType) => {
 
     const fileMetadata = {
         name: driveFileName,
-        ...(folderId && { parents: [folderId] })
+        ...(folderId && folderId !== 'root' && { parents: [folderId] })
     };
 
     const media = {
@@ -75,7 +72,12 @@ export const uploadToDrive = async (filePath, fileName, mimeType) => {
  * @param {string} fileId - Google Drive file ID
  */
 export const deleteFromDrive = async (fileId) => {
-    const drive = initDriveClient();
+    if (!isAuthenticated()) {
+        console.warn('Not authenticated, skipping Drive delete');
+        return;
+    }
+
+    const drive = await getDriveClient();
 
     try {
         await drive.files.delete({ fileId });
@@ -92,7 +94,7 @@ export const deleteFromDrive = async (fileId) => {
  * @returns {Promise<string>}
  */
 export const getFileLink = async (fileId) => {
-    const drive = initDriveClient();
+    const drive = await getDriveClient();
 
     try {
         // Make the file accessible via link
@@ -113,31 +115,5 @@ export const getFileLink = async (fileId) => {
     } catch (error) {
         console.error('Error getting file link:', error.message);
         throw new Error(`Failed to get file link: ${error.message}`);
-    }
-};
-
-/**
- * List files in the HSA folder
- * @returns {Promise<Array>}
- */
-export const listDriveFiles = async () => {
-    const drive = initDriveClient();
-    const folderId = process.env.GOOGLE_DRIVE_FOLDER_ID;
-
-    try {
-        const query = folderId
-            ? `'${folderId}' in parents and trashed = false`
-            : 'trashed = false';
-
-        const response = await drive.files.list({
-            q: query,
-            fields: 'files(id, name, mimeType, size, createdTime, webViewLink)',
-            orderBy: 'createdTime desc'
-        });
-
-        return response.data.files || [];
-    } catch (error) {
-        console.error('Error listing Drive files:', error.message);
-        throw new Error(`Failed to list Drive files: ${error.message}`);
     }
 };
